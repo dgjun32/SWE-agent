@@ -128,10 +128,12 @@ class SWEEnv:
             startup_commands = [
                 f"cd /{self.repo.repo_name}",
                 "export ROOT=$(pwd -P)",
-                "git status",
-                "git restore .",
-                f"git reset --hard {self.repo.base_commit}",
-                "git clean -fdq",
+                "rm -rf .git",
+                "git init",
+                "git config user.name root",
+                "git config user.email root@localhost",
+                "git add .",
+                "git commit -m 'Initial commit'",
             ]
             self.communicate(
                 input=" && ".join(startup_commands),
