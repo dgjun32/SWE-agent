@@ -84,11 +84,13 @@ class LocalRepoConfig(BaseModel):
         return self
 
     def copy(self, deployment: AbstractDeployment):
-        self.check_valid_repo()
+        # No need to be a git repo.
+        # self.check_valid_repo()
         asyncio.run(
             deployment.runtime.upload(UploadRequest(source_path=str(self.path), target_path=f"/{self.repo_name}"))
         )
-        r = asyncio.run(deployment.runtime.execute(Command(command=f"chown -R root:root /{self.repo_name}", shell=True)))
+        # We do `mkdir -p` to avoid errors if the repo is empty.
+        r = asyncio.run(deployment.runtime.execute(Command(command=f"mkdir -p /{self.repo_name} && chown -R root:root /{self.repo_name}", shell=True)))
         if r.exit_code != 0:
             msg = f"Failed to change permissions on copied repository (exit code: {r.exit_code}, stdout: {r.stdout}, stderr: {r.stderr})"
             raise RuntimeError(msg)

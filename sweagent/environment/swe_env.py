@@ -133,7 +133,7 @@ class SWEEnv:
                 "git config user.name root",
                 "git config user.email root@localhost",
                 "git add .",
-                "git commit -m 'Initial commit'",
+                "git commit --allow-empty -m 'Initial commit'",
             ]
             self.communicate(
                 input=" && ".join(startup_commands),
