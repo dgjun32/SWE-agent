@@ -64,7 +64,7 @@ class GenericAPIModelConfig(PydanticBaseModel):
         description="Cost limit for every instance (task).",
     )
     total_cost_limit: float = Field(default=0.0, description="Total cost limit.")
-    temperature: float = 0.0
+    temperature: float | None = 0.0
     """Sampling temperature"""
     top_p: float | None = 1.0
     """Sampling top-p"""
@@ -113,7 +113,9 @@ class GenericAPIModelConfig(PydanticBaseModel):
 
     @property
     def id(self) -> str:
-        return f"{self.name}__t-{self.temperature:.2f}__p-{self.top_p:.2f}__c-{self.per_instance_cost_limit:.2f}"
+        temperature_str: str = f"{self.temperature:.2f}" if self.temperature is not None else "null"
+        top_p_str: str = f"{self.top_p:.2f}" if self.top_p is not None else "null"
+        return f"{self.name}__t-{temperature_str}__p-{top_p_str}__c-{self.per_instance_cost_limit:.2f}"
 
 
 class ReplayModelConfig(GenericAPIModelConfig):
