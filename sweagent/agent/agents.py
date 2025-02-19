@@ -84,7 +84,8 @@ class TemplateConfig(BaseModel):
     too_long_command_output_template: str = (
         "The command '{{command}}' finished within the timeout, and the exit code was {{exit_code}}. "
         "However, the output of the command is too long to paste here. Please open the file {{log_stdout}} "
-        "and {{log_stderr}} to see the stdout and stderr outputs, respectively."
+        "and {{log_stderr}} to see the stdout and stderr outputs, respectively. "
+        "Since these files can be long, do NOT print the entire file contents here."
     )
     """Message template for when the agent's command output was too long.
     Available variables: `command`, `exit_code`, `log_stdout`, `log_stderr`
