@@ -81,6 +81,15 @@ class TemplateConfig(BaseModel):
     Available variables: `timeout`, `command`
     """
 
+    too_long_command_output_template: str = (
+        "The command '{{command}}' finished within the timeout, and the exit code was {{exit_code}}. "
+        "However, the output of the command is too long to paste here. Please open the file {{log_stdout}} "
+        "and {{log_stderr}} to see the stdout and stderr outputs, respectively."
+    )
+    """Message template for when the agent's command output was too long.
+    Available variables: `command`, `exit_code`, `log_stdout`, `log_stderr`
+    """
+
     def model_post_init(self, __context):
         self.demonstrations = _convert_paths_to_abspath(self.demonstrations)
         if self.next_step_no_output_template is None:
@@ -536,7 +545,7 @@ class Agent:
         except Exception as e:
             self.logger.debug("Failed to interrupt session before autosubmit: %s. Ignoring.", e)
         try:
-            observation = self._env.communicate(input=self.tools.config.submit_command)
+            observation = self._env.communicate(input=self.tools.config.submit_command).output
         except Exception as e:
             self.logger.debug("Failed to submit after error, got %s", e)
             return step
@@ -609,12 +618,23 @@ class Agent:
         execution_t0 = time.perf_counter()
         run_action: str = self.tools.guard_multiline_input(step.action).strip()
         try:
-            step.observation = self._env.communicate(
+            result = self._env.communicate(
                 input=run_action,
                 timeout=self.tools.config.execution_timeout,
                 set_last_action=True,
                 check="raise" if self._always_require_zero_exit_code else "ignore",
             )
+            if len(result.output) <= self.tools.config.max_output_length:
+                step.observation = result.output
+            else:
+                # If the output is too long, do not show it in the observation
+                # but instead suggest to open the log files to see the output
+                step.observation = Template(self.templates.too_long_command_output_template).render(
+                    command=run_action,
+                    exit_code=result.exit_code,
+                    log_stdout=result.log_stdout,
+                    log_stderr=result.log_stderr,
+                )
         except CommandTimeoutError:
             try:
                 self._env.interrupt_session()

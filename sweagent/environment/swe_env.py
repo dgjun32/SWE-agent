@@ -35,6 +35,13 @@ class EnvironmentConfig(BaseModel):
     name: str = "main"
 
 
+class CommunicateResult(BaseModel):
+    output: str = ""
+    exit_code: int | None = None
+    log_stdout: str | None = None
+    log_stderr: str | None = None
+
+
 class SWEEnv:
     def __init__(
         self,
@@ -63,6 +70,7 @@ class SWEEnv:
         self.name = name
         self.clean_multi_line_functions = lambda x: x
         self._chook = CombinedEnvHooks()
+        self._communicate_id = -1
         for hook in hooks or []:
             self.add_hook(hook)
 
@@ -100,7 +108,7 @@ class SWEEnv:
         if self.repo is None:
             return
 
-        folders = self.communicate(input="ls", check="raise").split("\n")
+        folders = self.communicate(input="ls", check="raise").output.split("\n")
         if self.repo.repo_name in folders:
             return
 
@@ -174,7 +182,7 @@ class SWEEnv:
         set_last_action: bool = False,
         check: Literal["warn", "ignore", "raise"] = "ignore",
         error_msg: str = "Command failed",
-    ) -> str:
+    ) -> CommunicateResult:
         """Executes a command in the running shell. The details of this are handled by
         the SWE-ReX deployment/runtime.
 
@@ -190,9 +198,16 @@ class SWEEnv:
             output: output from container
         """
         self.logger.log(logging.TRACE, "Input:\n%s", input)  # type: ignore
+        self._communicate_id += 1
+        log_stdout = f"/tmp/command_{self._communicate_id}_stdout.log"
+        log_stderr = f"/tmp/command_{self._communicate_id}_stderr.log"
+        if input == "":
+            command = f"true > >(tee {log_stdout}) 2> >(tee -a {log_stderr} >&2)"
+        else:
+            command = f"{{ {input}; }} > >(tee {log_stdout}) 2> >(tee -a {log_stderr} >&2)"
         rex_check = "silent" if check else "ignore"
         r = asyncio.run(
-            self.deployment.runtime.run_in_session(BashAction(command=input, timeout=timeout, check=rex_check))
+            self.deployment.runtime.run_in_session(BashAction(command=command, timeout=timeout, check=rex_check))
         )
         output = r.output
         self.logger.log(logging.TRACE, "Output:\n%s", output)  # type: ignore
@@ -212,7 +227,7 @@ class SWEEnv:
             r = asyncio.run(
                 self.deployment.runtime.run_in_session(BashAction(command=input, timeout=1, check="ignore"))
             )
-        return output
+        return CommunicateResult(output=output, exit_code=r.exit_code, log_stdout=log_stdout, log_stderr=log_stderr)
 
     # todo: Use the runtime for this instead
     def read_file(self, path: str | PurePath) -> str:
@@ -229,7 +244,7 @@ class SWEEnv:
             raise ValueError(msg)
 
         path_in_container = f"/{self.repo.repo_name}/{path}"
-        return self.communicate(f"cat {str(path_in_container)}")
+        return self.communicate(f"cat {str(path_in_container)}").output
 
     def set_env_variables(self, env_variables: dict[str, str]) -> None:
         """Set environment variables in the environment."""

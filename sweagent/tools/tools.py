@@ -93,6 +93,11 @@ class ToolConfig(BaseModel):
     install_timeout: int = 300
     """Timeout used for each of the installation commands"""
 
+    max_output_length: int = 100000
+    """Maximum length of the output to paste in the context. If it is longer, the stdout/stderr
+    log file paths will be provided instead.
+    """
+
     @cached_property
     def use_function_calling(self) -> bool:
         return isinstance(self.parse_function, FunctionCallingParser)
@@ -222,7 +227,7 @@ class ToolHandler:
     def _install_commands(self, env: SWEEnv) -> None:
         """Make sure all commands are available in the container"""
         env.set_env_variables(self.config.env_variables)
-        cwd = env.communicate("pwd", check="raise").strip()
+        cwd = env.communicate("pwd", check="raise").output.strip()
         asyncio.run(self._upload_bundles(env))
         for bundle in self.config.bundles:
             cmds = [
@@ -238,7 +243,7 @@ class ToolHandler:
                 timeout=self.config.install_timeout,
             )
         env.communicate(f"cd {cwd}", check="raise")
-        path = env.communicate("echo $PATH", check="raise").strip()
+        path = env.communicate("echo $PATH", check="raise").output.strip()
         asyncio.run(self._check_available_commands(env, {"PATH": path}))
 
     # Getting state
@@ -247,7 +252,7 @@ class ToolHandler:
     def _get_state(self, state_command: str, env: SWEEnv) -> dict[str, str]:
         """Execute state command in the environment and parse the output as a json object."""
         # Enough to warn, because we're gonna load the output anyway, so that probably catches all real errors
-        output = env.communicate(state_command, check="warn").strip()
+        output = env.communicate(state_command, check="warn").output.strip()
         if not output:
             self.logger.warning(f"State command {state_command!r} returned empty output")
             return {}
