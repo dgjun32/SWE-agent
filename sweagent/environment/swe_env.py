@@ -10,7 +10,7 @@ from swerex.deployment.config import DeploymentConfig, DockerDeploymentConfig, g
 from swerex.runtime.abstract import BashAction, BashInterruptAction, CreateBashSessionRequest
 
 from sweagent.environment.hooks.abstract import CombinedEnvHooks, EnvHook
-from sweagent.environment.repo import Repo, RepoConfig
+from sweagent.environment.repo import Repo, RepoConfig, GithubRepoConfig
 from sweagent.utils.log import get_logger
 
 
@@ -136,13 +136,23 @@ class SWEEnv:
             startup_commands = [
                 f"cd /{self.repo.repo_name}",
                 "export ROOT=$(pwd -P)",
-                "rm -rf .git",
-                "git init",
-                "git config user.name root",
-                "git config user.email root@localhost",
-                "git add .",
-                "git commit --allow-empty -m 'Initial commit'",
             ]
+            if isinstance(self.repo, GithubRepoConfig):
+                startup_commands.extend([
+                    "git status",
+                    "git restore .",
+                    f"git reset --hard {self.repo.base_commit}",
+                    "git clean -fdq",
+                ])
+            else:
+                startup_commands.extend([
+                    "rm -rf .git",
+                    "git init",
+                    "git config user.name root",
+                    "git config user.email root@localhost",
+                    "git add .",
+                    "git commit --allow-empty -m 'Initial commit'",
+                ])
             self.communicate(
                 input=" && ".join(startup_commands),
                 check="raise",
@@ -205,11 +215,12 @@ class SWEEnv:
             command = f"true > >(tee {log_stdout}) 2> >(tee -a {log_stderr} >&2)"
         else:
             command = f"{{ {input}; }} > >(tee {log_stdout}) 2> >(tee -a {log_stderr} >&2)"
-        rex_check = "silent" if check else "ignore"
+        rex_check = "silent"
         r = asyncio.run(
             self.deployment.runtime.run_in_session(BashAction(command=command, timeout=timeout, check=rex_check))
         )
         output = r.output
+        result = CommunicateResult(output=output, exit_code=r.exit_code, log_stdout=log_stdout, log_stderr=log_stderr)
         self.logger.log(logging.TRACE, "Output:\n%s", output)  # type: ignore
         if check != "ignore" and r.exit_code != 0:
             self.logger.error(f"{error_msg}:\n{output}")
@@ -217,7 +228,7 @@ class SWEEnv:
             self.logger.error(msg)
             if check == "raise":
                 self.close()
-                raise RuntimeError(msg)
+                return result
         # todo: What do we do with this?
         if set_last_action:
             # Cannot merge this with last command, because of multiline command
@@ -227,7 +238,7 @@ class SWEEnv:
             r = asyncio.run(
                 self.deployment.runtime.run_in_session(BashAction(command=input, timeout=1, check="ignore"))
             )
-        return CommunicateResult(output=output, exit_code=r.exit_code, log_stdout=log_stdout, log_stderr=log_stderr)
+        return result
 
     # todo: Use the runtime for this instead
     def read_file(self, path: str | PurePath) -> str:

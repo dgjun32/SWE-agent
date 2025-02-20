@@ -83,9 +83,10 @@ class TemplateConfig(BaseModel):
 
     too_long_command_output_template: str = (
         "The command '{{command}}' finished within the timeout, and the exit code was {{exit_code}}. "
-        "However, the output of the command is too long to paste here. Please open the file {{log_stdout}} "
-        "and {{log_stderr}} to see the stdout and stderr outputs, respectively. "
-        "Since these files can be long, do NOT print the entire file contents here."
+        "However, the output of the command is too long, so only the last snippet of the output is pasted below. "
+        "If you need the full output, read the stdout and stderr from {{log_stdout}} and {{log_stderr}}, respectively. "
+        "Since these files can be long, do NOT print the entire file contents here.\n\n"
+        "---- TRUNCATED OUTPUT ----\n\n{{truncated_output}}"
     )
     """Message template for when the agent's command output was too long.
     Available variables: `command`, `exit_code`, `log_stdout`, `log_stderr`
@@ -635,6 +636,7 @@ class Agent:
                     exit_code=result.exit_code,
                     log_stdout=result.log_stdout,
                     log_stderr=result.log_stderr,
+                    truncated_output=result.output[-self.tools.config.max_output_length:],
                 )
         except CommandTimeoutError:
             try:
