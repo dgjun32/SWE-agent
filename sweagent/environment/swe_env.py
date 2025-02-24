@@ -162,9 +162,12 @@ class SWEEnv:
             )
 
     def close(self) -> None:
-        """Shoutdown SWE-ReX deployment etc."""
+        """Shutdown SWE-ReX deployment etc."""
         self.logger.info("Beginning environment shutdown...")
-        asyncio.run(self.deployment.stop())
+        try:
+            asyncio.run(self.deployment.stop())
+        except Exception as e:
+            self.logger.error(f"Error during shutdown: {e}")
         self._chook.on_close()
 
     # MARK: Helper functions #
