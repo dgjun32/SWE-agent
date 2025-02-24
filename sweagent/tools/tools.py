@@ -93,9 +93,9 @@ class ToolConfig(BaseModel):
     install_timeout: int = 300
     """Timeout used for each of the installation commands"""
 
-    max_output_length: int = 100000
-    """Maximum length of the output to paste in the context. If it is longer, the stdout/stderr
-    log file paths will be provided instead.
+    max_output_lines: int = 120
+    """Maximum lines of the output to paste in the context. If it is longer, only the last
+    `max_output_lines` lines will be pasted, and the stdout/stderr log file paths will be provided.
     """
 
     @cached_property
