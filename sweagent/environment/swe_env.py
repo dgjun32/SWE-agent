@@ -167,7 +167,7 @@ class SWEEnv:
         try:
             asyncio.run(self.deployment.stop())
         except Exception as e:
-            self.logger.error(f"Error during shutdown: {e}")
+            pass
         self._chook.on_close()
 
     # MARK: Helper functions #
