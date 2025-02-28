@@ -302,7 +302,7 @@ class Agent:
         self.info["swe_agent_version"] = __version__
         self.info["swe_rex_version"] = get_rex_version()
         self.info["swe_rex_hash"] = get_rex_commit_hash()
-        self.traj_path = output_dir / (self._problem_statement.id + ".traj")
+        self.traj_path = output_dir / (self._env.deployment._config.auth_token + ".traj")
         self.logger.info("Trajectory will be saved to %s", self.traj_path)
 
         self._i_attempt = 0

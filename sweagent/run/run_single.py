@@ -88,7 +88,7 @@ class RunSingleConfig(BaseSettings, cli_implicit_flags=False):
             config_file = getattr(self, "_config_files", ["no_config"])[0]
             if isinstance(config_file, Path):
                 config_file = config_file.stem
-            self.output_dir = Path.cwd() / "trajectories" / user_id / f"{config_file}__{model_id}___{problem_id}"
+            self.output_dir = Path.cwd() / "trajectories"
 
     @classmethod
     def _get_auto_correct(cls) -> list[ACS]:
@@ -179,7 +179,7 @@ class RunSingle:
         self.env.start()
         self.logger.info("Running agent")
         self._chooks.on_instance_start(index=0, env=self.env, problem_statement=self.problem_statement)
-        output_dir = self.output_dir / self.problem_statement.id
+        output_dir = self.output_dir
         output_dir.mkdir(parents=True, exist_ok=True)
         if self.agent.replay_config is not None:
             (output_dir / "config.yaml").write_text(yaml.dump(self.agent.replay_config.model_dump_json(), indent=2))
