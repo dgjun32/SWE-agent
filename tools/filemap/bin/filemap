@@ -1,4 +1,4 @@
-#!/root/miniconda3/bin/python
+#!/workspace/conda/envs/swerex/bin/python3
 
 import argparse
 import warnings
