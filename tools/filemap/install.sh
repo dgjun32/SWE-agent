@@ -1,0 +1,1 @@
+/workspace/conda/envs/swerex/bin/python3 -m pip install tree-sitter-languages
