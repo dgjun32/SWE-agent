@@ -7,7 +7,7 @@ import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from threading import Lock
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Optional, Union
 
 import litellm
 import litellm.types.utils
@@ -65,6 +65,7 @@ class GenericAPIModelConfig(PydanticBaseModel):
     )
     total_cost_limit: float = Field(default=0.0, description="Total cost limit.")
     temperature: float | None = 0.0
+    n_samples: Optional[int] = Field(default=None, description="Number of samples to generate")
     """Sampling temperature"""
     top_p: float | None = 1.0
     """Sampling top-p"""
@@ -483,7 +484,7 @@ class LiteLLMModel(AbstractModel):
             return None
         return random.choice(api_keys)
 
-    def _query(self, messages: list[dict[str, str]]) -> dict:
+    def _query(self, messages: list[dict[str, str]]) -> Union[list, dict]:
         input_tokens: int = litellm.utils.token_counter(messages=messages, model=self.args.name)
         if self.model_max_input_tokens is None:
             self.logger.warning(f"No max input tokens found for model {self.args.name!r}")
@@ -504,6 +505,7 @@ class LiteLLMModel(AbstractModel):
             model=self.args.name,
             messages=messages,
             temperature=self.args.temperature,
+            n = self.args.n_samples,
             top_p=self.args.top_p,
             api_version=self.args.api_version,
             api_key=self._get_api_key(),
@@ -512,20 +514,39 @@ class LiteLLMModel(AbstractModel):
             **extra_args,
         )
         choices: litellm.types.utils.Choices = response.choices  # type: ignore
-        output = choices[0].message.content or ""
-        output_dict = {"message": output}
-        cost = litellm.cost_calculator.completion_cost(response)
-        output_tokens = litellm.utils.token_counter(text=output, model=self.args.name)
-        self._update_stats(input_tokens=input_tokens, output_tokens=output_tokens, cost=cost)
-        if self.tools.use_function_calling:
-            if response.choices[0].message.tool_calls:  # type: ignore
-                tool_calls = [call.to_dict() for call in response.choices[0].message.tool_calls]  # type: ignore
-            else:
-                tool_calls = []
-            output_dict["tool_calls"] = tool_calls
-        return output_dict
+        if len(choices) == 1:
+            output = choices[0].message.content or ""
+            output_dict = {"message": output}
+            cost = litellm.cost_calculator.completion_cost(response)
+            output_tokens = litellm.utils.token_counter(text=output, model=self.args.name)
+            self._update_stats(input_tokens=input_tokens, output_tokens=output_tokens, cost=cost)
+            if self.tools.use_function_calling:
+                if response.choices[0].message.tool_calls:  # type: ignore
+                    tool_calls = [call.to_dict() for call in response.choices[0].message.tool_calls]  # type: ignore
+                else:
+                    tool_calls = []
+                output_dict["tool_calls"] = tool_calls
+            return output_dict
+        
+        elif len(choices) > 1:
+            candidates = []
+            for i in range(len(choices)):
+                output = choices[i].message.content or ""
+                output_dict = {"message": output}
+                cost = litellm.cost_calculator.completion_cost(response)
+                output_tokens = litellm.utils.token_counter(text=output, model=self.args.name)
+                self._update_stats(input_tokens=input_tokens, output_tokens=output_tokens, cost=cost)
+                if self.tools.use_function_calling:
+                    if response.choices[0].message.tool_calls:  # type: ignore
+                        tool_calls = [call.to_dict() for call in response.choices[0].message.tool_calls]  # type: ignore
+                    else:
+                        tool_calls = []
+                    output_dict["tool_calls"] = tool_calls
+                candidates.append(output_dict)
+            
+            return candidates
 
-    def query(self, history: History) -> dict:
+    def query(self, history: History) -> Union[list, dict]:
         elapsed_time = time.time() - GLOBAL_STATS.last_query_timestamp
         if elapsed_time < self.args.delay:
             time.sleep(self.args.delay - elapsed_time)

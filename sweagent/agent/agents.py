@@ -1,13 +1,15 @@
 from __future__ import annotations
-
+import os
 import copy
 import json
 import time
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import yaml
+import openai
+from openai import AzureOpenAI
 from jinja2 import Template
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from simple_parsing.helpers.fields import field
@@ -112,6 +114,15 @@ class TemplateConfig(BaseModel):
             logger.warning("demonstration_template is ignored when put_demos_in_history is True")
         return self
 
+# added for test-time scaling
+class CriticConfig(BaseModel):
+    name: str  # required field
+    system_template: str
+    api_version: Optional[str] = None
+    temperature: float = 0.0  # optional with default
+    max_tokens: int = 2048     # optional with default
+    top_p: float = 0.0
+    
 
 class AgentConfig(BaseModel):
     """This configuration object specifies the behavior of an agent."""
@@ -121,7 +132,7 @@ class AgentConfig(BaseModel):
     tools: ToolConfig = Field(default_factory=ToolConfig)
     history_processors: list[HistoryProcessor] = Field(default_factory=lambda: [DefaultHistoryProcessor()])
     model: ModelConfig = Field(description="Model options.")
-
+    critic: Optional[CriticConfig] = None
     max_requeries: int = 3
     """Maximum number of times to requery the model after an error, such as a
     formatting error, a blocked action, or a bash syntax error.
@@ -157,6 +168,7 @@ class Agent:
         name: str = "main",
         _catch_errors: bool = True,
         _always_require_zero_exit_code: bool = False,
+        critic_config = None
     ):
         """The agent handles the behaviour of the model and how it interacts with the environment.
 
@@ -171,6 +183,7 @@ class Agent:
         self.history_processors = history_processors
         self.max_requeries = max_requeries
         self.logger = get_logger("swea-agent", emoji="🤠")
+        self.critic_config = critic_config
 
         # Set in run method
         self._env: SWEEnv | None = None
@@ -206,6 +219,7 @@ class Agent:
             history_processors=config.history_processors,
             model=model,
             max_requeries=config.max_requeries,
+            critic_config = config.critic
         )
 
     def add_hook(self, hook: AbstractAgentHook) -> None:
@@ -386,12 +400,18 @@ class Agent:
         """
         assert self._problem_statement is not None
         assert self._env is not None
+        problem_stmt = self._problem_statement.get_problem_statement()
+        self.issue_stmt = problem_stmt.split('<<separator_tag>>')[0]
+        try:
+            self.privileged_info = problem_stmt.split('<<separator_tag>>')[1]
+        except:
+            self.privileged_info = None
         return dict(
             command_docs=self.tools.config.command_docs,
             **self.tools.config.env_variables,
             **kwargs,
             **self._forwarded_vars,
-            problem_statement=self._problem_statement.get_problem_statement(),
+            problem_statement=self.issue_stmt,
             repo=self._env.repo.repo_name if self._env.repo is not None else "",
             **self._problem_statement.get_extra_fields(),
         )
@@ -684,8 +704,58 @@ class Agent:
         try:
             # Forward model and get actions
             self._chook.on_model_query(messages=history, agent=self.name)
-            output = self.model.query(history)  # type: ignore
-            step.output = output["message"]
+            output = self.model.query(history)
+            
+            # Evaluate the multiple outputs and choose the best one (self.critic_config is not None)
+            if self.critic_config is not None:
+                # history: list of dict (initially, length of 25 - 24idx history (user prompt) 부터 본격 테스크 시작)
+                ## system prompt: ['role', 'content', 'agent', 'message_type'] - consists of 
+                ## user prompt: ['message_type', 'role', 'content', 'agent', 'is_demo']
+                ## assistant response: ['message_type', 'role', 'content', 'thought', 'action', 'agent', 'tool_calls', 'is_demo']
+                
+                # output: list of dict (each dicts are sampled n responses)
+                ## ['meesage', 'tool_calls']
+                ## output[i]['tool_calls'][0]['function'] 을 추출하면 될듯 {'arguments': '{"filename":"reproduce.py"}', 'name': 'create'}
+                try:
+                # craft prompt for critic
+                    critic_prompt = [history[0]['content']]
+                    for i, d in enumerate(history[24:]):
+                        if (d['role'] == 'user') or (d['role'] == 'tool'):
+                            obs = d['content']
+                            critic_prompt.append(f"OBSERVATION {i//2+1}.\n\n{obs}")
+                        if d['role'] == 'assistant':
+                            thought = d['thought']
+                            action = d['action']
+                            critic_prompt.append(f"💭 THOUGHT {i//2+1}\n{thought}\n\n🎬 ACTION {i//2+1}\n{action.strip()}")
+                    critic_prompt = "Here is the history of the debugging process:" + '\n\n'.join(critic_prompt) + '\n\n'
+                    critic_prompt += "Here are possible thought and actions to take:\n\n"
+                    for i, d in enumerate(output):
+                        thought = d['message']
+                        action = d['tool_calls'][0]['function']
+                        critic_prompt += f"Option {i+1}.\n💭 THOUGHT:\n{thought.strip()}\n🎬 ACTION:\n{action}\n\n\n"
+                    critic_prompt += "Please choose the index number of the best option.\n\n"
+                    critic_system_prompt = self.critic_config.system_template
+                    if '[privileged_info]' in critic_system_prompt and self.privileged_info is not None:
+                        critic_system_prompt = critic_system_prompt.replace('[privileged_info]', self.privileged_info).replace('[issue_statement]', self.issue_stmt)
+                    response = self.critic_client.chat.completions.create(
+                        model=self.critic_config.name.split('/')[-1],
+                        messages = [{'role': 'system', 'content': critic_system_prompt},
+                                    {'role': 'user', 'content': critic_prompt}],
+                        max_tokens = self.critic_config.max_tokens,
+                        temperature = self.critic_config.temperature,
+                        top_p = self.critic_config.top_p,
+                        )
+                    content = response.choices[0].message.content
+                    choice = int(content.split('<CHOICE>')[-1].split('</CHOICE>')[0].strip())-1
+                    output = output[choice]
+                    print(f"Among options, option {choice+1} was chosen.")
+                except:
+                    output = output[0]
+                    print(f"Critic failed to choose the best option. Using the first option.")
+                step.output = output["message"]
+            else:
+                step.output = output["message"]
+
             if isinstance(self.model, HumanThoughtModel):
                 # TODO: This might be a bit hacky
                 # consider changing sweagent/tools/tools.py:ToolConfig to enforce this.
@@ -696,7 +766,7 @@ class Agent:
                 step.thought, step.action = self.tools.parse_actions(output)
             if output.get("tool_calls") is not None:
                 step.tool_call_ids = [call["id"] for call in output["tool_calls"]]
-                step.tool_calls = output["tool_calls"]
+                step.tool_calls = output["tool_calls"] 
             self.logger.info(f"💭 THOUGHT\n{step.thought}\n\n🎬 ACTION\n{step.action.strip()}")
             self._chook.on_actions_generated(step=step)
             return self.handle_action(step)
@@ -892,6 +962,14 @@ class Agent:
         output_dir.mkdir(parents=True, exist_ok=True)
         self.setup(env=env, problem_statement=problem_statement, output_dir=output_dir)
 
+        # if self.critic_config is not None --> setup client for reward model
+        if self.critic_config is not None:
+            self.critic_client = AzureOpenAI(
+                azure_endpoint = os.environ["AZURE_API_BASE"],
+                api_key = os.environ["AZURE_OPENAI_API_KEY"],
+                api_version="2024-05-01-preview"
+            )
+            
         # Run action/observation loop
         self._chook.on_run_start()
         step_output = StepOutput()
